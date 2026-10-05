@@ -1,87 +1,36 @@
-# Welcome to React Router!
+# KRA Management
 
-A modern, production-ready template for building full-stack React applications using React Router.
+Internal tool for tracking monthly employee KRA performance, quarterly aggregation, remarks and report export.
+Fully client-side: **IndexedDB** (`kra-db`) is the only persistence. No backend, no localStorage/sessionStorage.
 
-[![Open in StackBlitz](https://developer.stackblitz.com/img/open_in_stackblitz.svg)](https://stackblitz.com/github/remix-run/react-router-templates/tree/main/default)
-
-## Features
-
-- 🚀 Server-side rendering
-- ⚡️ Hot Module Replacement (HMR)
-- 📦 Asset bundling and optimization
-- 🔄 Data loading and mutations
-- 🔒 TypeScript by default
-- 🎉 TailwindCSS for styling
-- 📖 [React Router docs](https://reactrouter.com/)
-
-## Getting Started
-
-### Installation
-
-Install the dependencies:
+## Commands
 
 ```bash
-npm install
+npm run dev        # development server
+npm run typecheck  # route typegen + tsc
+npm run test       # business-logic tests (Vitest)
+npm run build      # production build (SPA, build/client)
 ```
 
-### Development
+## Layout
 
-Start the development server with HMR:
+- `app/domain/` pure business logic (calculations, quarterly, carry-forward, validation, import, backup, export report, dashboard)
+- `app/db/` IndexedDB core (`indexeddb.ts`), `migrations.ts`, `seed.ts`, `repositories/*`
+- `app/routes/` route modules (`clientLoader`/`clientAction` read from and write to IndexedDB)
+- `app/components/` UI by area; `app/utils/` dates, csv, formatting, xlsx writer
 
-```bash
-npm run dev
-```
+## IndexedDB schema (`kra-db`, version 2)
 
-Your application will be available at `http://localhost:5173`.
+| Store | Key | Indexes |
+|---|---|---|
+| `employees` | `id` | `name` (unique), `active` |
+| `kraConfig` | `id` | `order` |
+| `monthlyKRA` | `id` | `employeeId`, `month`, `employeeId_month` (unique) |
+| `settings` | `id` | – (holds `app-settings` and `goLiveOverride:*` documents) |
 
-## Building for Production
+## Calculation rules
 
-Create a production build:
-
-```bash
-npm run build
-```
-
-## Deployment
-
-### Docker Deployment
-
-To build and run using Docker:
-
-```bash
-docker build -t my-app .
-
-# Run the container
-docker run -p 3000:3000 my-app
-```
-
-The containerized application can be deployed to any platform that supports Docker, including:
-
-- AWS ECS
-- Google Cloud Run
-- Azure Container Apps
-- Digital Ocean App Platform
-- Fly.io
-- Railway
-
-### DIY Deployment
-
-If you're familiar with deploying Node applications, the built-in app server is production-ready.
-
-Make sure to deploy the output of `npm run build`
-
-```
-├── package.json
-├── package-lock.json (or pnpm-lock.yaml, or bun.lockb)
-├── build/
-│   ├── client/    # Static assets
-│   └── server/    # Server-side code
-```
-
-## Styling
-
-This template comes with [Tailwind CSS](https://tailwindcss.com/) already configured for a simple default starting experience. You can use whatever CSS framework you prefer.
-
----
-
-Built with ❤️ using React Router.
+- Monthly total = sum of achievements over **active** KRAs (missing = 0), recalculated on read.
+- Quarterly = sum of monthly values / months with data (configurable: sum, or missing months as zero).
+- Go Live carry-forward: previous quarter had manual Go Live > 0, current quarter has records but no Go Live → +5 (configurable), capped at the KRA weight. Per-employee, per-quarter manual overrides are stored separately.
+- Quarterly total = sum of the final per-category values (including carry-forward / override).

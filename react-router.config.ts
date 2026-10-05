@@ -1,7 +1,7 @@
 import type { Config } from "@react-router/dev/config";
 
 export default {
-  // Config options...
-  // Server-side render by default, to enable SPA mode set this to `false`
-  ssr: true,
+  // SPA mode - all rendering happens client-side
+  // IndexedDB is client-only, so SSR is not applicable
+  ssr: false,
 } satisfies Config;
