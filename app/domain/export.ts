@@ -5,10 +5,12 @@
 
 import type { KRAConfig } from "~/types/kra";
 import type { QuarterlyKRA } from "~/types/monthly-kra";
+import type { KRATemplate } from "~/types/template";
 import { formatQuarter, getMonthLabel, getMonthShortLabel } from "~/utils/dates";
 import { roundTo } from "~/utils/formatting";
 import { calculateMonthlyAchievement } from "./kra/calculations";
 import { describeGoLiveSource } from "./kra/carry-forward";
+import { krasForTemplate, templateName } from "./kra/templates";
 
 export type ReportCell = string | number;
 
@@ -35,69 +37,82 @@ function shortMonth(month: string): string {
 
 export function buildQuarterlyReport(
   quarterlies: QuarterlyKRA[],
-  kras: KRAConfig[],
+  allKras: KRAConfig[],
+  templates: KRATemplate[],
   year: number,
   quarter: number,
   generatedAt: string = new Date().toISOString(),
 ): QuarterlyReport {
-  const active = kras.filter((k) => k.active).sort((a, b) => a.order - b.order);
   const quarterMonths = quarterlies[0]?.quarterMonths ?? [];
-  const maxMonthly = active.reduce((s, k) => s + k.weight, 0);
+
+  // Templates that actually appear in the selection, in template order.
+  const used = templates.filter((t) => quarterlies.some((q) => q.templateId === t.id));
+  const multi = used.length > 1;
+  const suffix = (t: KRATemplate) => (multi ? ` (${t.name})` : "");
 
   const summary: ReportSection = {
     heading: "Employee Summary",
-    header: ["Employee", ...quarterMonths.map(getMonthLabel), "Quarterly Avg", "Max Possible"],
+    header: ["Employee", ...(multi ? ["Template"] : []), ...quarterMonths.map(getMonthLabel), "Quarterly Avg", "Max Possible"],
     rows: quarterlies.map((q) => [
       q.employeeName,
+      ...(multi ? [templateName(templates, q.templateId)] : []),
       ...q.quarterMonths.map((m) => (m in q.monthlyTotals ? r2(q.monthlyTotals[m]) : "—")),
       r2(q.quarterlyAchievement),
       r2(q.maxPossible),
     ]),
   };
 
-  const monthlyRows: ReportCell[][] = [["Weight", ...active.map((k) => k.weight), "", maxMonthly, ""]];
-  for (const q of quarterlies) {
-    for (const rec of q.monthlyRecords) {
-      monthlyRows.push([
-        q.employeeName,
-        ...active.map((k) => r2(rec.achievements[k.id] ?? 0)),
-        shortMonth(rec.month),
-        r2(calculateMonthlyAchievement(rec.achievements, kras)),
-        rec.remarks?.trim() ?? "",
-      ]);
-    }
-    if (q.monthlyRecords.length === 0) {
-      monthlyRows.push([q.employeeName, ...active.map(() => "—"), "No data", "—", ""]);
-    }
-  }
-  const monthly: ReportSection = {
-    heading: "KRA Development — Monthly KRA",
-    header: ["Employee", ...active.map((k) => k.name), "Month", "Total Achv.", "Remarks"],
-    rows: monthlyRows,
-    boldRows: [0],
-  };
+  const monthlySections: ReportSection[] = [];
+  const categorySections: ReportSection[] = [];
 
-  const categories: ReportSection = {
-    heading: "Quarterly Category Summary",
-    header: ["Employee", ...active.map((k) => k.name), "Quarterly Total", "Max Possible"],
-    rows: [
-      ["Weight", ...active.map((k) => k.weight), maxMonthly, ""],
-      ...quarterlies.map((q): ReportCell[] => [
-        q.employeeName,
-        ...active.map((k) => r2(q.categories[k.id]?.final ?? 0)),
-        r2(q.quarterlyAchievement),
-        r2(q.maxPossible),
-      ]),
-    ],
-    boldRows: [0],
-  };
+  for (const template of used) {
+    const kras = krasForTemplate(allKras, template.id, true);
+    const group = quarterlies.filter((q) => q.templateId === template.id);
+    const maxMonthly = kras.reduce((s, k) => s + k.weight, 0);
+
+    const monthlyRows: ReportCell[][] = [["Weight", ...kras.map((k) => k.weight), "", maxMonthly, ""]];
+    for (const q of group) {
+      for (const rec of q.monthlyRecords) {
+        monthlyRows.push([
+          q.employeeName,
+          ...kras.map((k) => r2(rec.achievements[k.id] ?? 0)),
+          shortMonth(rec.month),
+          r2(calculateMonthlyAchievement(rec.achievements, kras)),
+          rec.remarks?.trim() ?? "",
+        ]);
+      }
+      if (q.monthlyRecords.length === 0) {
+        monthlyRows.push([q.employeeName, ...kras.map(() => "—"), "No data", "—", ""]);
+      }
+    }
+    monthlySections.push({
+      heading: `KRA Development — Monthly KRA${suffix(template)}`,
+      header: ["Employee", ...kras.map((k) => k.name), "Month", "Total Achv.", "Remarks"],
+      rows: monthlyRows,
+      boldRows: [0],
+    });
+
+    categorySections.push({
+      heading: `Quarterly Category Summary${suffix(template)}`,
+      header: ["Employee", ...kras.map((k) => k.name), "Quarterly Total", "Max Possible"],
+      rows: [
+        ["Weight", ...kras.map((k) => k.weight), maxMonthly, ""],
+        ...group.map((q): ReportCell[] => [
+          q.employeeName,
+          ...kras.map((k) => r2(q.categories[k.id]?.final ?? 0)),
+          r2(q.quarterlyAchievement),
+          r2(q.maxPossible),
+        ]),
+      ],
+      boldRows: [0],
+    });
+  }
 
   const notes: ReportSection = {
     heading: "Go Live Carry-forward Notes",
     header: ["Employee", "Go Live", "Source", "Note"],
     rows: quarterlies.map((q): ReportCell[] => {
-      const goLiveId = kras.find((k) => k.active && k.isGoLive)?.id;
-      if (!q.goLive || !goLiveId) return [q.employeeName, "—", "—", "No Go Live KRA configured."];
+      if (!q.goLive) return [q.employeeName, "—", "—", "No Go Live KRA configured."];
       const value = q.goLiveOverride ?? q.goLive.total;
       if (q.goLiveOverride !== null) {
         return [q.employeeName, r2(value), "Manual override", `Overridden to ${r2(q.goLiveOverride)} (automatic value was ${r2(q.goLive.total)}).`];
@@ -118,7 +133,7 @@ export function buildQuarterlyReport(
     title: "KRA Development",
     subtitle: `Quarterly KRA Report — ${formatQuarter(year, quarter)}`,
     generatedAt,
-    sections: [summary, monthly, categories, notes],
+    sections: [summary, ...monthlySections, ...categorySections, notes],
   };
 }
 

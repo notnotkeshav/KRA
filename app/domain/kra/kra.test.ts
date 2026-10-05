@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { buildDefaultKRAConfig, buildDefaultSettings } from "~/db/seed";
+import {
+  buildAllDefaultKRAConfig, buildDefaultKRAConfig, buildDefaultSettings, buildDefaultTemplates, buildSampleEmployees,
+  buildSampleMonthlyKRAs,
+} from "~/db/seed";
+import { DEVELOPER_TEMPLATE_ID, FUNCTIONAL_TEMPLATE_ID } from "~/types/template";
+import { krasForTemplate } from "./templates";
 import type { KRAConfig } from "~/types/kra";
 import type { MonthlyKRA } from "~/types/monthly-kra";
 import { validateBackup } from "../backup";
-import { analyzeImport } from "../import";
-import { parseCSV } from "~/utils/csv";
-import { normalizeMonth } from "~/utils/dates";
 import { buildQuarterlyReport, flattenReport } from "../export";
 import { buildXlsxBytes, crc32 } from "~/utils/xlsx";
 import {
@@ -26,7 +28,7 @@ import {
 
 const kras = buildDefaultKRAConfig();
 const settings = buildDefaultSettings();
-const KESHAV = { id: "emp-keshav", name: "Keshav", active: true, createdAt: "", updatedAt: "" };
+const KESHAV = { id: "emp-keshav", name: "Keshav", templateId: DEVELOPER_TEMPLATE_ID, active: true, createdAt: "", updatedAt: "" };
 const employees = [KESHAV];
 const GO_LIVE = "kra-go-live";
 
@@ -173,12 +175,12 @@ describe("Go Live carry-forward", () => {
 
   it("flows through the quarterly summary across a year boundary and honours overrides", () => {
     const recs = [record("a", "2025-11", 10), record("a", "2026-02", 0, { "kra-timesheet": 8 })];
-    const q = buildQuarterlyKRA({ id: "a", name: "A" }, 2026, 1, recs, kras, settings);
+    const q = buildQuarterlyKRA({ id: "a", name: "A", templateId: DEVELOPER_TEMPLATE_ID }, 2026, 1, recs, kras, settings);
     expect(q.goLive?.source).toBe("carry-forward");
     expect(q.categories[GO_LIVE].final).toBe(5);
     expect(q.quarterlyAchievement).toBe(13);
 
-    const overridden = buildQuarterlyKRA({ id: "a", name: "A" }, 2026, 1, recs, kras, settings, [
+    const overridden = buildQuarterlyKRA({ id: "a", name: "A", templateId: DEVELOPER_TEMPLATE_ID }, 2026, 1, recs, kras, settings, [
       { id: "x", kind: "goLiveOverride", employeeId: "a", year: 2026, quarter: 1, value: 2, createdAt: "", updatedAt: "" },
     ]);
     expect(overridden.goLiveOverride).toBe(2);
@@ -213,57 +215,19 @@ describe("validation", () => {
   });
 });
 
-describe("month normalization", () => {
-  it("normalizes spreadsheet formats", () => {
-    expect(normalizeMonth("Apr-26")).toBe("2026-04");
-    expect(normalizeMonth("Jul-26")).toBe("2026-07");
-    expect(normalizeMonth("May 2026")).toBe("2026-05");
-    expect(normalizeMonth("2026-06")).toBe("2026-06");
-    expect(normalizeMonth("2026-13")).toBeNull();
-    expect(normalizeMonth("Foo-26")).toBeNull();
-  });
-});
-
-describe("CSV import", () => {
-  const header =
-    "Employee,No Bugs in Development,Project Timeline,Timesheet,Ideation,Go Live,Team/Junior Developer Grooming/multi Platform Work task level,Documentation,Timesheet Review for Manager/ChatGpt code,Month,Total Achv.,Remarks";
-  const ctx = (over = {}) => ({ kras, employees, existingRecords: [], settings, createMissingEmployees: false, ...over });
-
-  it("parses multiline quoted remarks and maps the spreadsheet headers", () => {
-    const csv = `${header}\r\nKeshav,15,5,5,5,5,10,0,10,Apr-26,55,"Client visit LG,\nASL"\r\n`;
-    const table = parseCSV(csv);
-    expect(table.rows).toHaveLength(1);
-    const preview = analyzeImport(table, ctx());
-    const row = preview.rows[0];
-    expect(row.status).toBe("ready");
-    expect(row.month).toBe("2026-04");
-    expect(row.calculatedTotal).toBe(55);
-    expect(row.remarks).toBe("Client visit LG,\nASL");
-    expect(preview.missingKRAs).toEqual([]);
-  });
-
-  it("warns on total mismatch and errors on bad values, unknown employees and duplicates", () => {
-    const csv = [
-      header,
-      "Keshav,15,5,5,5,5,10,0,10,Apr-26,99,x",
-      "Keshav,15,5,5,5,5,10,0,10,Apr-26,55,dup",
-      "Nobody,15,5,5,5,5,10,0,10,Apr-26,55,",
-      "Keshav,25,abc,5,5,5,10,0,10,Smarch,55,",
-    ].join("\n");
-    const rows = analyzeImport(parseCSV(csv), ctx()).rows;
-    expect(rows[0].status).toBe("warning");
-    expect(rows[0].warnings.some((w) => w.field === "Total Achv.")).toBe(true);
-    expect(rows[1].errors.some((e) => /Duplicate/.test(e.message))).toBe(true);
-    expect(rows[2].errors.some((e) => /Unknown employee/.test(e.message))).toBe(true);
-    expect(rows[3].errors.length).toBeGreaterThanOrEqual(3);
-    expect(analyzeImport(parseCSV(csv), ctx({ createMissingEmployees: true })).rows[2].status).toBe("warning");
-  });
-});
-
 describe("backup validation", () => {
   const good = { version: 1, exportedAt: "x", employees, kraConfig: kras, monthlyKRA: seeded, settings: [settings] };
   it("accepts a well-formed backup", () => {
     expect(validateBackup(good).ok).toBe(true);
+  });
+  it("accepts a templated backup and fills templates for a legacy one", () => {
+    const result = validateBackup({ ...good, templates: buildDefaultTemplates(), kraConfig: buildAllDefaultKRAConfig() });
+    expect(result.ok).toBe(true);
+    const legacy = validateBackup({ ...good, kraConfig: kras.map(({ templateId: _t, ...k }) => k) });
+    expect(legacy.ok && legacy.backup.templates.length).toBe(2);
+    expect(legacy.ok && legacy.backup.kraConfig.some((k) => k.templateId === FUNCTIONAL_TEMPLATE_ID)).toBe(true);
+    const badTemplate = validateBackup({ ...good, templates: buildDefaultTemplates().slice(1), kraConfig: kras });
+    expect(badTemplate.ok).toBe(false);
   });
   it("rejects malformed backups", () => {
     expect(validateBackup(null).ok).toBe(false);
@@ -275,10 +239,61 @@ describe("backup validation", () => {
   });
 });
 
+describe("templates", () => {
+  const all = buildAllDefaultKRAConfig();
+  const babita = buildSampleEmployees().find((e) => e.name === "Babita")!;
+  const babitaRecords = buildSampleMonthlyKRAs().filter((r) => r.employeeId === babita.id);
+
+  it("keeps every template's active weights at 100", () => {
+    expect(validateKRAWeights(krasForTemplate(all, DEVELOPER_TEMPLATE_ID))).toEqual([]);
+    expect(validateKRAWeights(krasForTemplate(all, FUNCTIONAL_TEMPLATE_ID))).toEqual([]);
+    expect(krasForTemplate(all, FUNCTIONAL_TEMPLATE_ID)).toHaveLength(8);
+  });
+
+  it("scores the functional sheet rows as 34, 65 and 55", () => {
+    const fk = krasForTemplate(all, FUNCTIONAL_TEMPLATE_ID);
+    const totals = babitaRecords.map((r) => calculateMonthlyAchievement(r.achievements, fk));
+    expect(totals).toEqual([34, 65, 55]);
+    const q = buildQuarterlyKRA(babita, 2026, 2, babitaRecords, all, settings);
+    expect(q.monthlyAverage).toBeCloseTo(51.3333, 3);
+    expect(q.maxPossible).toBe(100);
+    expect(Object.keys(q.categories).every((id) => id.startsWith("fkra-"))).toBe(true);
+  });
+
+  it("does not mix KRAs across templates", () => {
+    const q = buildQuarterlyKRA(KESHAV, 2026, 2, seeded, all, settings);
+    expect(q.maxPossible).toBe(100);
+    expect(q.templateId).toBe(DEVELOPER_TEMPLATE_ID);
+    expect(Object.keys(q.categories).some((id) => id.startsWith("fkra-"))).toBe(false);
+  });
+
+  it("applies Go Live carry-forward within the functional template", () => {
+    const goLive = "fkra-go-live";
+    const prior = { ...babitaRecords[0], id: "p", month: "2026-02", achievements: { ...babitaRecords[0].achievements, [goLive]: 5 } };
+    const current = { ...babitaRecords[0], id: "c", month: "2026-05", achievements: { ...babitaRecords[0].achievements, [goLive]: 0 } };
+    const q = buildQuarterlyKRA(babita, 2026, 2, [prior, current], all, settings);
+    expect(q.goLive?.source).toBe("carry-forward");
+    expect(q.categories[goLive].final).toBe(5);
+  });
+
+  it("reports one monthly and category section per template", () => {
+    const emps = buildSampleEmployees();
+    const recs = buildSampleMonthlyKRAs();
+    const qs = emps.map((e) => buildQuarterlyKRA(e, 2026, 2, recs, all, settings));
+    const report = buildQuarterlyReport(qs, all, buildDefaultTemplates(), 2026, 2, "2026-10-05T00:00:00Z");
+    const headings = report.sections.map((s) => s.heading);
+    expect(headings).toContain("KRA Development — Monthly KRA (Developer)");
+    expect(headings).toContain("Quarterly Category Summary (Functional)");
+    const functional = report.sections.find((s) => s.heading === "Quarterly Category Summary (Functional)")!;
+    expect(functional.header).toContain("Accounts");
+    expect(functional.rows.find((r) => r[0] === "Babita")?.at(-2)).toBe(51.33);
+  });
+});
+
 describe("export", () => {
   it("builds a report whose values match the quarterly summary", () => {
     const q = [buildQuarterlyKRA(KESHAV, 2026, 2, seeded, kras, settings)];
-    const report = buildQuarterlyReport(q, kras, 2026, 2, "2026-10-05T00:00:00Z");
+    const report = buildQuarterlyReport(q, kras, buildDefaultTemplates(), 2026, 2, "2026-10-05T00:00:00Z");
     const summary = report.sections[0];
     expect(summary.rows[0]).toEqual(["Keshav", 55, 73, 68, 65.33, 100]);
     const monthly = report.sections[1];

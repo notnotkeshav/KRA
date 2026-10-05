@@ -26,47 +26,10 @@ export type BackupData = {
   version: 1;
   exportedAt: string;
   employees: unknown[];
+  templates?: unknown[];
   kraConfig: unknown[];
   monthlyKRA: unknown[];
   settings: unknown[];
-};
-
-export type ImportIssue = {
-  row: number;
-  field: string;
-  message: string;
-};
-
-export type ImportRowStatus = "ready" | "warning" | "error";
-
-export type ImportRow = {
-  rowNumber: number;
-  employeeName: string;
-  employeeId: string | null; // null => employee must be created
-  createEmployee: boolean;
-  month: string;
-  achievements: Record<string, number>;
-  calculatedTotal: number;
-  importedTotal: number | null;
-  remarks: string;
-  existingRecordId: string | null;
-  status: ImportRowStatus;
-  errors: ImportIssue[];
-  warnings: ImportIssue[];
-};
-
-export type ImportPreview = {
-  rows: ImportRow[];
-  fileErrors: string[];
-  unmatchedColumns: string[];
-  missingKRAs: string[];
-};
-
-export type ImportResult = {
-  imported: number;
-  skipped: number;
-  overwritten: number;
-  createdEmployees: number;
 };
 
 export type ExportFormat = "csv" | "xlsx" | "print";

@@ -6,6 +6,7 @@ import { getAllGoLiveOverrides } from "~/db/repositories/settings";
 import { calculateMonthlyAchievement } from "~/domain/kra/calculations";
 import { describeGoLiveSource } from "~/domain/kra/carry-forward";
 import { buildQuarterlyKRA } from "~/domain/kra/quarterly";
+import { krasForTemplate, templateName } from "~/domain/kra/templates";
 import { type Quarter, formatMonth, getQuarterFromMonth, getYearFromMonth } from "~/utils/dates";
 import { formatNumber, shortKraName } from "~/utils/formatting";
 import { Badge, Card, EmptyState, PageHeader, cardCls } from "~/components/common/ui";
@@ -31,18 +32,26 @@ export async function clientLoader({ params }: Route.ClientLoaderArgs) {
     .sort((a, b) => b.year - a.year || b.quarter - a.quarter)
     .map((p) => buildQuarterlyKRA(employee, p.year, p.quarter, records, ctx.kras, ctx.settings, overrides));
 
-  return { employee, kras: ctx.kras.filter((k) => k.active), records: [...records].reverse(), quarterly, allKras: ctx.kras };
+  const templateKras = krasForTemplate(ctx.kras, employee.templateId);
+  return {
+    employee,
+    templateLabel: templateName(ctx.templates, employee.templateId),
+    kras: templateKras.filter((k) => k.active),
+    records: [...records].reverse(),
+    quarterly,
+    allKras: templateKras,
+  };
 }
 
 export default function EmployeeDetail({ loaderData }: Route.ComponentProps) {
-  const { employee, kras, records, quarterly, allKras } = loaderData;
+  const { employee, templateLabel, kras, records, quarterly, allKras } = loaderData;
   const th = "px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500";
 
   return (
     <>
       <PageHeader
         title={employee.name}
-        description={[employee.designation, employee.employeeCode && `Code ${employee.employeeCode}`].filter(Boolean).join(" · ") || undefined}
+        description={[employee.designation, employee.employeeCode && `Code ${employee.employeeCode}`, `${templateLabel} template`].filter(Boolean).join(" · ") || undefined}
         actions={
           <>
             {employee.active ? <Badge tone="green">Active</Badge> : <Badge>Deactivated</Badge>}

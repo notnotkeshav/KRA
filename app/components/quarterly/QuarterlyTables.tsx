@@ -8,7 +8,7 @@ import { Badge, cardCls } from "~/components/common/ui";
 
 const th = "px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500";
 
-export function QuarterlySummaryTable({ data, goLiveId }: { data: QuarterlyKRA[]; goLiveId?: string }) {
+export function QuarterlySummaryTable({ data }: { data: QuarterlyKRA[] }) {
   const months = data[0]?.quarterMonths ?? [];
   return (
     <div className={`${cardCls} overflow-x-auto`}>
@@ -23,7 +23,7 @@ export function QuarterlySummaryTable({ data, goLiveId }: { data: QuarterlyKRA[]
         </thead>
         <tbody className="divide-y divide-slate-100">
           {data.map((q) => {
-            const adjusted = goLiveId && Math.abs(q.quarterlyAchievement - q.monthlyAverage) > 1e-9;
+            const adjusted = !!q.goLive && Math.abs(q.quarterlyAchievement - q.monthlyAverage) > 1e-9;
             return (
               <tr key={q.employeeId}>
                 <td className="px-3 py-2 font-medium">

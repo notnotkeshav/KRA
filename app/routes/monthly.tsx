@@ -2,6 +2,8 @@ import { useEffect, useRef } from "react";
 import { Link, redirect, useFetcher, useNavigate } from "react-router";
 import type { Route } from "./+types/monthly";
 import { loadAppContext } from "~/db/context";
+import { getEmployee } from "~/db/repositories/employees";
+import { krasForTemplate, templateName } from "~/domain/kra/templates";
 import { deleteMonthlyKRA, getMonthlyKRA, getMonthlyKRAs, saveMonthlyKRA } from "~/db/repositories/monthly-kra";
 import { calculateMonthlyAchievement } from "~/domain/kra/calculations";
 import { validateMonthlyEntry } from "~/domain/kra/validation";
@@ -37,14 +39,23 @@ export async function clientLoader({ params }: Route.ClientLoaderArgs) {
   // /monthly/:year/:month: pick the first employee so the URL always names one.
   if (!params.employeeId) {
     if (activeEmployees.length > 0) throw redirect(path(month, activeEmployees[0].id));
-    return { month, ctx, employee: null, record: undefined, enteredIds: [] as string[] };
+    return { month, ctx, employee: null, record: undefined, enteredIds: [] as string[], kras: [], templateLabel: "" };
   }
 
   const employee = ctx.employees.find((e) => e.id === params.employeeId);
   if (!employee) throw new Response("Employee not found", { status: 404, statusText: "Employee not found" });
 
   const [record, monthRecords] = await Promise.all([getMonthlyKRA(employee.id, month), getMonthlyKRAs(month)]);
-  return { month, ctx, employee, record, enteredIds: monthRecords.map((r) => r.employeeId) };
+  return {
+    month,
+    ctx,
+    employee,
+    record,
+    enteredIds: monthRecords.map((r) => r.employeeId),
+    // The employee is scored on their template's KRAs only.
+    kras: krasForTemplate(ctx.kras, employee.templateId),
+    templateLabel: templateName(ctx.templates, employee.templateId),
+  };
 }
 
 type SaveResult = ActionResult<{ total?: number; andNext?: boolean }>;
@@ -64,7 +75,9 @@ export async function clientAction({ request, params }: Route.ClientActionArgs):
       return { ok: true, message: "Record deleted." };
     }
 
-    const { kras, settings } = await loadAppContext();
+    const [{ kras: allKras, settings }, employee] = await Promise.all([loadAppContext(), getEmployee(params.employeeId)]);
+    if (!employee) return { ok: false, error: "Employee not found." };
+    const kras = krasForTemplate(allKras, employee.templateId);
     const active = kras.filter((k) => k.active);
     const achievements: Record<string, number> = {};
     for (const k of active) {
@@ -98,7 +111,7 @@ export default function MonthlyRoute(props: Route.ComponentProps) {
 }
 
 function MonthlyPage({ loaderData }: Route.ComponentProps) {
-  const { month, ctx, employee, record, enteredIds } = loaderData;
+  const { month, ctx, employee, record, enteredIds, kras, templateLabel } = loaderData;
   const navigate = useNavigate();
   const fetcher = useFetcher<SaveResult>();
   const advance = useRef(false);
@@ -108,7 +121,7 @@ function MonthlyPage({ loaderData }: Route.ComponentProps) {
   const index = employee ? employeeOptions.findIndex((e) => e.id === employee.id) : -1;
   const prevEmployee = index > 0 ? employeeOptions[index - 1] : undefined;
   const nextEmployee = index >= 0 ? employeeOptions[index + 1] : undefined;
-  const activeKras = ctx.kras.filter((k) => k.active);
+  const activeKras = kras.filter((k) => k.active);
 
   const result = fetcher.data;
   const busy = fetcher.state !== "idle";
@@ -171,7 +184,7 @@ function MonthlyPage({ loaderData }: Route.ComponentProps) {
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-base font-semibold text-slate-900">
               {employee.name} · {formatMonth(month)}{" "}
-              {record ? <Badge tone="green">Saved</Badge> : <Badge tone="amber">No record yet</Badge>}
+              {record ? <Badge tone="green">Saved</Badge> : <Badge tone="amber">No record yet</Badge>} <Badge tone="indigo">{templateLabel}</Badge>
               {!employee.active && <> <Badge>Inactive</Badge></>}
             </h2>
             <div className="flex gap-2">

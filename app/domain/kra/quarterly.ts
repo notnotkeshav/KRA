@@ -15,6 +15,7 @@ import {
   sumValues,
 } from "./calculations";
 import { calculateGoLiveCarryForward } from "./carry-forward";
+import { krasForTemplate } from "./templates";
 
 export function aggregationFromSettings(settings: AppSettings): AggregationOptions {
   return {
@@ -33,19 +34,21 @@ export function findGoLiveKRA(kras: KRAConfig[]): KRAConfig | undefined {
 }
 
 /**
- * Builds the quarterly summary for one employee.
+ * Builds the quarterly summary for one employee, scored against the KRAs of
+ * the employee's template (`allKras` may contain every template's KRAs).
  * `employeeRecords` may contain any months; only the quarter and the previous
  * quarter are used.
  */
 export function buildQuarterlyKRA(
-  employee: Pick<Employee, "id" | "name">,
+  employee: Pick<Employee, "id" | "name" | "templateId">,
   year: number,
   quarter: Quarter,
   employeeRecords: MonthlyKRA[],
-  kras: KRAConfig[],
+  allKras: KRAConfig[],
   settings: AppSettings,
   overrides: GoLiveOverride[] = [],
 ): QuarterlyKRA {
+  const kras = krasForTemplate(allKras, employee.templateId);
   const opts = aggregationFromSettings(settings);
   const activeKras = kras.filter((k) => k.active);
   const quarterMonths = getMonthsForQuarter(year, quarter);
@@ -99,6 +102,7 @@ export function buildQuarterlyKRA(
   return {
     employeeId: employee.id,
     employeeName: employee.name,
+    templateId: employee.templateId,
     year,
     quarter,
     quarterMonths,
@@ -119,7 +123,7 @@ export function buildQuarterlyKRA(
 
 /** Summaries for the given employees (callers decide whether to include inactive ones). */
 export function buildQuarterlyKRAs(
-  employees: Pick<Employee, "id" | "name">[],
+  employees: Pick<Employee, "id" | "name" | "templateId">[],
   year: number,
   quarter: Quarter,
   records: MonthlyKRA[],

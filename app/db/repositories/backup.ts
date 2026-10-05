@@ -1,18 +1,21 @@
 import type { BackupData } from "~/types/settings";
 import { validateBackup, type ParsedBackup } from "~/domain/backup";
 import { DatabaseError, STORES, getAll, req, withTx } from "../indexeddb";
-import { buildDefaultKRAConfig, buildDefaultSettings, buildSampleEmployees, buildSampleMonthlyKRAs } from "../seed";
+import {
+  buildAllDefaultKRAConfig, buildDefaultSettings, buildDefaultTemplates, buildSampleEmployees, buildSampleMonthlyKRAs,
+} from "../seed";
 
-const ALL = [STORES.employees, STORES.kraConfig, STORES.monthlyKRA, STORES.settings] as const;
+const ALL = [STORES.employees, STORES.templates, STORES.kraConfig, STORES.monthlyKRA, STORES.settings] as const;
 
 export async function exportBackup(): Promise<BackupData> {
-  const [employees, kraConfig, monthlyKRA, settings] = await Promise.all([
+  const [employees, templates, kraConfig, monthlyKRA, settings] = await Promise.all([
     getAll<unknown>(STORES.employees),
+    getAll<unknown>(STORES.templates),
     getAll<unknown>(STORES.kraConfig),
     getAll<unknown>(STORES.monthlyKRA),
     getAll<unknown>(STORES.settings),
   ]);
-  return { version: 1, exportedAt: new Date().toISOString(), employees, kraConfig, monthlyKRA, settings };
+  return { version: 1, exportedAt: new Date().toISOString(), employees, templates, kraConfig, monthlyKRA, settings };
 }
 
 /**
@@ -27,14 +30,16 @@ export async function restoreBackup(input: unknown): Promise<ParsedBackup> {
   await withTx(ALL, "readwrite", async (s) => {
     for (const name of ALL) await req(s[name].clear());
     for (const e of backup.employees) await req(s[STORES.employees].put(e));
+    for (const t of backup.templates) await req(s[STORES.templates].put(t));
     for (const k of backup.kraConfig) await req(s[STORES.kraConfig].put(k));
     for (const m of backup.monthlyKRA) await req(s[STORES.monthlyKRA].put(m));
     for (const x of backup.settings) await req(s[STORES.settings].put(x));
     // A backup without app settings or KRAs still has to leave the app usable.
     const hasSettings = backup.settings.some((x) => x.id === "app-settings");
     if (!hasSettings) await req(s[STORES.settings].put(buildDefaultSettings()));
-    if (backup.kraConfig.length === 0) {
-      for (const k of buildDefaultKRAConfig()) await req(s[STORES.kraConfig].put(k));
+    if (backup.templates.length === 0) {
+      for (const t of buildDefaultTemplates()) await req(s[STORES.templates].put(t));
+      for (const k of buildAllDefaultKRAConfig()) await req(s[STORES.kraConfig].put(k));
     }
   });
   return backup;
@@ -44,7 +49,8 @@ export async function restoreBackup(input: unknown): Promise<ParsedBackup> {
 export async function clearDatabase(): Promise<void> {
   await withTx(ALL, "readwrite", async (s) => {
     for (const name of ALL) await req(s[name].clear());
-    for (const k of buildDefaultKRAConfig()) await req(s[STORES.kraConfig].put(k));
+    for (const t of buildDefaultTemplates()) await req(s[STORES.templates].put(t));
+    for (const k of buildAllDefaultKRAConfig()) await req(s[STORES.kraConfig].put(k));
     await req(s[STORES.settings].put(buildDefaultSettings()));
   });
 }
@@ -53,7 +59,8 @@ export async function clearDatabase(): Promise<void> {
 export async function resetToSampleData(): Promise<void> {
   await withTx(ALL, "readwrite", async (s) => {
     for (const name of ALL) await req(s[name].clear());
-    for (const k of buildDefaultKRAConfig()) await req(s[STORES.kraConfig].put(k));
+    for (const t of buildDefaultTemplates()) await req(s[STORES.templates].put(t));
+    for (const k of buildAllDefaultKRAConfig()) await req(s[STORES.kraConfig].put(k));
     for (const e of buildSampleEmployees()) await req(s[STORES.employees].put(e));
     for (const m of buildSampleMonthlyKRAs()) await req(s[STORES.monthlyKRA].put(m));
     await req(s[STORES.settings].put(buildDefaultSettings()));

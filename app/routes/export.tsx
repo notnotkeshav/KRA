@@ -43,7 +43,7 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
     getAllGoLiveOverrides(),
   ]);
   const data = buildQuarterlyKRAs(selected, year, quarter, records, ctx.kras, ctx.settings, overrides.filter((o) => o.year === year && o.quarter === quarter));
-  const report = buildQuarterlyReport(data, ctx.kras, year, quarter);
+  const report = buildQuarterlyReport(data, ctx.kras, ctx.templates, year, quarter);
   const hasData = data.some((q) => q.months.length > 0);
 
   return { year, quarter, employeeId, employees: ctx.employees, report, hasData, selectedName: employeeId ? (selected[0]?.name ?? null) : null };

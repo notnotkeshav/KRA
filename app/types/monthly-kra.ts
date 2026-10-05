@@ -41,6 +41,7 @@ export type QuarterlyCategory = {
 export type QuarterlyKRA = {
   employeeId: string;
   employeeName: string;
+  templateId: string;
   year: number;
   quarter: number; // 1-4
   /** All three months of the quarter, in order. */

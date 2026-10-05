@@ -1,27 +1,54 @@
-import { useMemo, useState } from "react";
-import { useFetcher } from "react-router";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useFetcher, useNavigate } from "react-router";
 import type { Route } from "./+types/kra-config";
 import { getKRAConfig, saveKRAConfig } from "~/db/repositories/kra-config";
+import { createTemplate, deleteTemplate, getTemplates, renameTemplate } from "~/db/repositories/templates";
+import { krasForTemplate } from "~/domain/kra/templates";
+import type { KRATemplate } from "~/types/template";
 import { sumActiveWeights, validateKRAConfigSet } from "~/domain/kra/validation";
 import type { KRAConfig } from "~/types/kra";
 import { type ActionResult, fail, readJson } from "~/utils/actions";
 import { generateId } from "~/utils/dates";
 import { formatNumber } from "~/utils/formatting";
-import { Alert, Badge, Button, Card, PageHeader, inputCls } from "~/components/common/ui";
+import { Alert, Badge, Button, Card, Field, Modal, PageHeader, inputCls } from "~/components/common/ui";
 
 export function meta() {
   return [{ title: "KRA Configuration · KRA Management" }];
 }
 
-export async function clientLoader() {
-  return { kras: await getKRAConfig() };
+export async function clientLoader({ request }: Route.ClientLoaderArgs) {
+  const [templates, kras] = await Promise.all([getTemplates(), getKRAConfig()]);
+  const wanted = new URL(request.url).searchParams.get("template");
+  const template = templates.find((t) => t.id === wanted) ?? templates[0];
+  return { templates, template, kras: template ? krasForTemplate(kras, template.id) : [] };
 }
 
-export async function clientAction({ request }: Route.ClientActionArgs): Promise<ActionResult> {
+type Intent =
+  | { intent: "save"; templateId: string; kras: KRAConfig[] }
+  | { intent: "createTemplate"; name: string; description: string; copyFromId: string }
+  | { intent: "renameTemplate"; id: string; name: string; description: string }
+  | { intent: "deleteTemplate"; id: string };
+
+type ConfigResult = ActionResult<{ templateId?: string }>;
+
+export async function clientAction({ request }: Route.ClientActionArgs): Promise<ConfigResult> {
   try {
-    const { kras } = await readJson<{ kras: KRAConfig[] }>(request);
-    await saveKRAConfig(kras);
-    return { ok: true, message: "KRA configuration saved." };
+    const body = await readJson<Intent>(request);
+    switch (body.intent) {
+      case "save":
+        await saveKRAConfig(body.templateId, body.kras);
+        return { ok: true, message: "KRA configuration saved." };
+      case "createTemplate": {
+        const t = await createTemplate(body);
+        return { ok: true, message: `Template "${t.name}" created with a copy of the selected KRAs. Adjust them below.`, templateId: t.id };
+      }
+      case "renameTemplate":
+        await renameTemplate(body.id, body);
+        return { ok: true, message: "Template updated." };
+      case "deleteTemplate":
+        await deleteTemplate(body.id);
+        return { ok: true, message: "Template deleted." };
+    }
   } catch (error) {
     return fail(error);
   }
@@ -39,15 +66,128 @@ function fromDraft(d: Draft): KRAConfig {
   return { ...rest, weight: weightText.trim() === "" ? Number.NaN : Number(weightText) };
 }
 
+type ConfigFetcher = ReturnType<typeof useFetcher<ConfigResult>>;
+
 export default function KRAConfigPage({ loaderData }: Route.ComponentProps) {
-  // Remount the editor whenever stored data changes, so the draft always reflects IndexedDB.
-  const version = loaderData.kras.map((k) => `${k.id}:${k.updatedAt}`).join("|");
+  const { templates, template, kras } = loaderData;
   // The fetcher lives here so its result survives the editor remount.
-  const fetcher = useFetcher<ActionResult>();
-  return <Editor key={version} saved={loaderData.kras} fetcher={fetcher} />;
+  const fetcher = useFetcher<ConfigResult>();
+  const navigate = useNavigate();
+  const [dialog, setDialog] = useState<"new" | "rename" | "delete" | null>(null);
+  const busy = fetcher.state !== "idle";
+  const result = fetcher.data;
+
+  useEffect(() => {
+    if (fetcher.state !== "idle" || !result?.ok) return;
+    setDialog(null);
+    if (result.templateId) navigate(`/kra-config?template=${result.templateId}`);
+    else if (result.message === "Template deleted.") navigate("/kra-config");
+  }, [fetcher.state, result, navigate]);
+
+  if (!template) {
+    return (
+      <>
+        <PageHeader title="KRA Configuration" />
+        <Alert tone="warning">No KRA templates exist. Restore a backup or reset to sample data in Settings.</Alert>
+      </>
+    );
+  }
+
+  const send = (payload: Intent) => fetcher.submit(payload, { method: "post", encType: "application/json" });
+  // Remount the editor whenever stored data changes, so the draft always reflects IndexedDB.
+  const version = `${template.id}|${kras.map((k) => `${k.id}:${k.updatedAt}`).join("|")}`;
+
+  return (
+    <>
+      <div className="mb-4 flex flex-wrap items-center gap-2" role="tablist" aria-label="KRA templates">
+        {templates.map((t) => (
+          <Link
+            key={t.id}
+            role="tab"
+            aria-selected={t.id === template.id}
+            to={`/kra-config?template=${t.id}`}
+            className={`rounded-full px-3.5 py-1.5 text-sm font-medium ${t.id === template.id ? "bg-indigo-600 text-white" : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"}`}
+          >
+            {t.name}
+          </Link>
+        ))}
+        <Button size="sm" variant="ghost" onClick={() => setDialog("new")}>+ New template</Button>
+        <span className="ml-auto flex gap-2">
+          <Button size="sm" onClick={() => setDialog("rename")}>Rename</Button>
+          <Button size="sm" variant="ghost" className="text-red-600" onClick={() => setDialog("delete")}>Delete template</Button>
+        </span>
+      </div>
+      {template.description && <p className="-mt-2 mb-4 text-sm text-slate-500">{template.description}</p>}
+
+      <Editor key={version} template={template} saved={kras} fetcher={fetcher} />
+
+      {dialog === "new" && (
+        <TemplateModal title="New template" templates={templates} copyFrom={template.id} busy={busy} error={result && !result.ok ? result.error : undefined}
+          onClose={() => setDialog(null)} onSubmit={(v) => send({ intent: "createTemplate", name: v.name, description: v.description, copyFromId: v.copyFromId })} />
+      )}
+      {dialog === "rename" && (
+        <TemplateModal title="Rename template" template={template} busy={busy} error={result && !result.ok ? result.error : undefined}
+          onClose={() => setDialog(null)} onSubmit={(v) => send({ intent: "renameTemplate", id: template.id, name: v.name, description: v.description })} />
+      )}
+      <Modal
+        open={dialog === "delete"}
+        onClose={() => setDialog(null)}
+        title="Delete this template?"
+        footer={
+          <>
+            <Button onClick={() => setDialog(null)} disabled={busy}>Cancel</Button>
+            <Button variant="danger" disabled={busy} onClick={() => send({ intent: "deleteTemplate", id: template.id })}>Delete template</Button>
+          </>
+        }
+      >
+        <p className="text-sm text-slate-600">
+          “{template.name}” and its KRA configuration will be deleted. Templates that employees use cannot be deleted.
+        </p>
+        {result && !result.ok && <Alert tone="error" className="mt-3">{result.error}</Alert>}
+      </Modal>
+    </>
+  );
 }
 
-function Editor({ saved, fetcher }: { saved: KRAConfig[]; fetcher: ReturnType<typeof useFetcher<ActionResult>> }) {
+function TemplateModal({
+  title, template, templates, copyFrom, busy, error, onClose, onSubmit,
+}: {
+  title: string; template?: KRATemplate; templates?: KRATemplate[]; copyFrom?: string; busy: boolean; error?: string;
+  onClose: () => void; onSubmit: (v: { name: string; description: string; copyFromId: string }) => void;
+}) {
+  const [name, setName] = useState(template?.name ?? "");
+  const [description, setDescription] = useState(template?.description ?? "");
+  const [source, setSource] = useState(copyFrom ?? "");
+  const invalid = name.trim().length < 2;
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={title}
+      footer={
+        <>
+          <Button onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button variant="primary" type="submit" form="template-form" disabled={busy || invalid}>{busy ? "Saving…" : "Save"}</Button>
+        </>
+      }
+    >
+      <form id="template-form" className="space-y-3" onSubmit={(e) => { e.preventDefault(); if (!invalid) onSubmit({ name, description, copyFromId: source }); }}>
+        {error && <Alert tone="error">{error}</Alert>}
+        <Field label="Name" htmlFor="tpl-name"><input id="tpl-name" className={inputCls} value={name} onChange={(e) => setName(e.target.value)} autoFocus required /></Field>
+        <Field label="Description (optional)" htmlFor="tpl-desc"><input id="tpl-desc" className={inputCls} value={description} onChange={(e) => setDescription(e.target.value)} /></Field>
+        {templates && (
+          <Field label="Start from" htmlFor="tpl-source" hint="The new template begins with a copy of this template's KRAs.">
+            <select id="tpl-source" className={inputCls} value={source} onChange={(e) => setSource(e.target.value)}>
+              {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+          </Field>
+        )}
+      </form>
+    </Modal>
+  );
+}
+
+function Editor({ template, saved, fetcher }: { template: KRATemplate; saved: KRAConfig[]; fetcher: ConfigFetcher }) {
   const [rows, setRows] = useState<Draft[]>(() => saved.map(toDraft));
   const busy = fetcher.state !== "idle";
 
@@ -82,7 +222,7 @@ function Editor({ saved, fetcher }: { saved: KRAConfig[]; fetcher: ReturnType<ty
     const now = new Date().toISOString();
     setRows((rs) => [
       ...rs,
-      { id: generateId(), name: "", weightText: "0", active: true, order: rs.length + 1, createdAt: now, updatedAt: now, isNew: true },
+      { id: generateId(), templateId: template.id, name: "", weightText: "0", active: true, order: rs.length + 1, createdAt: now, updatedAt: now, isNew: true },
     ]);
   };
 
@@ -92,15 +232,15 @@ function Editor({ saved, fetcher }: { saved: KRAConfig[]; fetcher: ReturnType<ty
   return (
     <>
       <PageHeader
-        title="KRA Configuration"
-        description="Define the KRAs and their weights. The weights of all active KRAs must add up to 100%."
+        title={`KRA Configuration — ${template.name}`}
+        description="Define the KRAs and their weights. The weights of all active KRAs in a template must add up to 100%."
         actions={
           <>
             <Button onClick={add}>Add KRA</Button>
             <Button
               variant="primary"
               disabled={busy || errors.length > 0 || !dirty}
-              onClick={() => fetcher.submit({ kras: configs }, { method: "post", encType: "application/json" })}
+              onClick={() => fetcher.submit({ intent: "save", templateId: template.id, kras: configs } satisfies Intent, { method: "post", encType: "application/json" })}
             >
               {busy ? "Saving…" : "Save changes"}
             </Button>

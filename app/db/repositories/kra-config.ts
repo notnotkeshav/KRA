@@ -18,11 +18,12 @@ export function getKRA(id: string): Promise<KRAConfig | undefined> {
 }
 
 /**
- * Replaces the whole KRA configuration atomically. The set is validated first
+ * Replaces one template's KRA configuration atomically. The set is validated first
  * (names, weights, total active weight = 100) so an invalid config is never stored.
- * KRAs missing from `next` are removed only if no monthly record references them.
+ * KRAs of that template missing from `next` are removed only if no monthly record references them.
  */
-export async function saveKRAConfig(next: KRAConfig[]): Promise<KRAConfig[]> {
+export async function saveKRAConfig(templateId: string, next: KRAConfig[]): Promise<KRAConfig[]> {
+  if (next.some((k) => k.templateId !== templateId)) throw new DatabaseError("invalid", "KRA does not belong to this template.");
   const problems = validateKRAConfigSet(next);
   if (problems.length) throw new DatabaseError("invalid", problems[0].message);
 
@@ -35,8 +36,9 @@ export async function saveKRAConfig(next: KRAConfig[]): Promise<KRAConfig[]> {
     updatedAt: now,
   }));
 
-  return withTx([S, STORES.monthlyKRA], "readwrite", async (s) => {
-    const existing = await req(s[S].getAll() as IDBRequest<KRAConfig[]>);
+  return withTx([S, STORES.monthlyKRA, STORES.templates], "readwrite", async (s) => {
+    if (!(await req(s[STORES.templates].get(templateId)))) throw new DatabaseError("not-found", "Template not found.");
+    const existing = await req(s[S].index("templateId").getAll(templateId) as IDBRequest<KRAConfig[]>);
     const keep = new Set(normalized.map((k) => k.id));
     const removed = existing.filter((k) => !keep.has(k.id));
     if (removed.length) {

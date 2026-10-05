@@ -1,6 +1,7 @@
 export type Employee = {
   id: string;
   name: string;
+  templateId: string;
   employeeCode?: string;
   designation?: string;
   active: boolean;
@@ -10,6 +11,7 @@ export type Employee = {
 
 export type EmployeeInput = {
   name: string;
+  templateId: string;
   employeeCode?: string;
   designation?: string;
 };

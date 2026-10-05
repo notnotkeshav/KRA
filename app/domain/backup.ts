@@ -4,6 +4,8 @@ import type { Employee } from "~/types/employee";
 import type { KRAConfig } from "~/types/kra";
 import type { MonthlyKRA } from "~/types/monthly-kra";
 import type { BackupData } from "~/types/settings";
+import { DEFAULT_TEMPLATE_ID, FUNCTIONAL_TEMPLATE_ID, type KRATemplate } from "~/types/template";
+import { buildDefaultTemplates, buildFunctionalKRAConfig } from "~/db/seed";
 import { isValidMonth } from "~/utils/dates";
 import { findDuplicateMonthlyRecords, validateKRAWeights } from "./kra/validation";
 
@@ -11,6 +13,7 @@ export type ParsedBackup = {
   version: 1;
   exportedAt: string;
   employees: Employee[];
+  templates: KRATemplate[];
   kraConfig: KRAConfig[];
   monthlyKRA: MonthlyKRA[];
   settings: { id: string }[];
@@ -43,7 +46,9 @@ export function validateBackup(input: unknown): BackupValidation {
   }
   if (errors.length) return { ok: false, errors };
 
+  if (input.templates !== undefined && !Array.isArray(input.templates)) return { ok: false, errors: ['"templates" must be an array.'] };
   const employees = input.employees as unknown[];
+  const rawTemplates = (input.templates as unknown[] | undefined) ?? [];
   const kraConfig = input.kraConfig as unknown[];
   const monthly = input.monthlyKRA as unknown[];
   const settings = input.settings as unknown[];
@@ -65,13 +70,22 @@ export function validateBackup(input: unknown): BackupValidation {
       err(`monthlyKRA[${i}].achievements must map KRA ids to numbers.`);
     }
   });
+  rawTemplates.forEach((t, i) => {
+    if (!isRecord(t) || !isStr(t.id) || !isStr(t.name)) err(`templates[${i}] needs id and name.`);
+  });
   settings.forEach((s, i) => {
     if (!isRecord(s) || !isStr(s.id)) err(`settings[${i}] needs an id.`);
   });
   if (errors.length) return { ok: false, errors };
 
-  const emps = employees as Employee[];
-  const kras = kraConfig as KRAConfig[];
+  // Backups from before templates existed: everything belongs to the Developer template.
+  const legacy = input.templates === undefined;
+  const templates: KRATemplate[] = legacy ? buildDefaultTemplates() : (rawTemplates as KRATemplate[]);
+  const emps = (employees as Employee[]).map((e) => ({ ...e, templateId: e.templateId || DEFAULT_TEMPLATE_ID }));
+  let kras = (kraConfig as KRAConfig[]).map((k) => ({ ...k, templateId: k.templateId || DEFAULT_TEMPLATE_ID }));
+  if (legacy && kras.length > 0 && !kras.some((k) => k.templateId === FUNCTIONAL_TEMPLATE_ID)) {
+    kras = [...kras, ...buildFunctionalKRAConfig()];
+  }
   const recs = monthly as MonthlyKRA[];
 
   const ids = new Set(emps.map((e) => e.id));
@@ -80,7 +94,18 @@ export function validateBackup(input: unknown): BackupValidation {
   if (names.size !== emps.length) err("Duplicate employee names.");
   if (new Set(kras.map((k) => k.id)).size !== kras.length) err("Duplicate KRA ids.");
   if (new Set(recs.map((r) => r.id)).size !== recs.length) err("Duplicate monthly record ids.");
-  if (kras.length > 0) validateKRAWeights(kras).forEach((e) => err(e.message));
+  if (new Set(templates.map((t) => t.id)).size !== templates.length) err("Duplicate template ids.");
+  const templateIds = new Set(templates.map((t) => t.id));
+  kras.forEach((k) => {
+    if (!templateIds.has(k.templateId)) err(`KRA "${k.name}" references unknown template ${k.templateId}.`);
+  });
+  emps.forEach((e) => {
+    if (!templateIds.has(e.templateId)) err(`Employee "${e.name}" references unknown template ${e.templateId}.`);
+  });
+  for (const t of templates) {
+    const set = kras.filter((k) => k.templateId === t.id);
+    if (set.length > 0) validateKRAWeights(set).forEach((e) => err(`Template "${t.name}": ${e.message}`));
+  }
   findDuplicateMonthlyRecords(recs).forEach((k) => err(`Duplicate monthly record for ${k.replace("|", " / ")}.`));
   recs.forEach((r) => {
     if (!ids.has(r.employeeId)) err(`Monthly record ${r.id} references unknown employee ${r.employeeId}.`);
@@ -94,6 +119,7 @@ export function validateBackup(input: unknown): BackupValidation {
       version: 1,
       exportedAt: typeof input.exportedAt === "string" ? input.exportedAt : "",
       employees: emps,
+      templates,
       kraConfig: kras,
       monthlyKRA: recs,
       settings: settings as { id: string }[],

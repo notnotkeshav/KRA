@@ -1,5 +1,6 @@
 export type KRAConfig = {
   id: string;
+  templateId: string;
   name: string;
   weight: number;
   description?: string;

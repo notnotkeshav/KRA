@@ -5,6 +5,7 @@ import { loadAppContext } from "~/db/context";
 import { getMonthlyKRAsBetween } from "~/db/repositories/monthly-kra";
 import { clearGoLiveOverride, getGoLiveOverrides, setGoLiveOverride } from "~/db/repositories/settings";
 import { buildQuarterlyKRAs, findGoLiveKRA } from "~/domain/kra/quarterly";
+import { krasForTemplate } from "~/domain/kra/templates";
 import type { QuarterlyKRA } from "~/types/monthly-kra";
 import { type ActionResult, fail, readJson } from "~/utils/actions";
 import {
@@ -38,7 +39,7 @@ export async function clientLoader({ params }: Route.ClientLoaderArgs) {
 
   const employees = ctx.employees.filter((e) => e.active);
   const data = buildQuarterlyKRAs(employees, year, quarter, records, ctx.kras, ctx.settings, overrides);
-  return { year, quarter, data, kras: ctx.kras.filter((k) => k.active), settings: ctx.settings, inactiveCount: ctx.employees.length - employees.length };
+  return { year, quarter, data, templates: ctx.templates, kras: ctx.kras.filter((k) => k.active), settings: ctx.settings, inactiveCount: ctx.employees.length - employees.length };
 }
 
 type Intent =
@@ -63,13 +64,18 @@ export async function clientAction({ request, params }: Route.ClientActionArgs):
 }
 
 export default function QuarterlyPage({ loaderData }: Route.ComponentProps) {
-  const { year, quarter, data, kras, settings, inactiveCount } = loaderData;
+  const { year, quarter, data, templates, kras, settings, inactiveCount } = loaderData;
   const navigate = useNavigate();
   const fetcher = useFetcher<ActionResult>();
   const [overriding, setOverriding] = useState<QuarterlyKRA | null>(null);
   const [value, setValue] = useState("");
 
-  const goLive = findGoLiveKRA(kras);
+  // Each employee is scored on their own template's KRAs, so category tables are grouped by template.
+  const groups = templates
+    .map((t) => ({ template: t, rows: data.filter((q) => q.templateId === t.id), kras: krasForTemplate(kras, t.id, true) }))
+    .filter((g) => g.rows.length > 0);
+  const goLive = overriding ? findGoLiveKRA(krasForTemplate(kras, overriding.templateId)) : undefined;
+  const anyGoLive = data.some((q) => q.goLive);
   const prev = getPreviousQuarter(year, quarter as Quarter);
   const next = getNextQuarter(year, quarter as Quarter);
   const months = getMonthsForQuarter(year, quarter as Quarter);
@@ -130,16 +136,23 @@ export default function QuarterlyPage({ loaderData }: Route.ComponentProps) {
         <div className="space-y-6">
           <section aria-labelledby="h-summary">
             <h2 id="h-summary" className="mb-2 text-sm font-semibold text-slate-800">Monthly achievement and quarterly average</h2>
-            <QuarterlySummaryTable data={data} goLiveId={goLive?.id} />
+            <QuarterlySummaryTable data={data} />
           </section>
 
           <section aria-labelledby="h-cat">
             <h2 id="h-cat" className="mb-2 text-sm font-semibold text-slate-800">Category-wise quarterly achievement</h2>
-            <QuarterlyCategoryTable data={data} kras={kras} />
+            <div className="space-y-4">
+              {groups.map((g) => (
+                <div key={g.template.id}>
+                  {groups.length > 1 && <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">{g.template.name}</h3>}
+                  <QuarterlyCategoryTable data={g.rows} kras={g.kras} />
+                </div>
+              ))}
+            </div>
           </section>
 
-          {goLive && (
-            <Card title={`${goLive.name} — carry-forward status`}>
+          {anyGoLive && (
+            <Card title="Go Live — carry-forward status">
               <p className="border-b border-slate-100 px-4 py-2 text-xs text-slate-500">
                 {settings.goLiveCarryForward.enabled
                   ? `If an employee had Go Live in the previous quarter and none this quarter, ${formatNumber(settings.goLiveCarryForward.percentage)}% is applied automatically. You can override it per employee.`

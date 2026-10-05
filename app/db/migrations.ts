@@ -4,18 +4,22 @@
  *
  *  v1: object stores and indexes
  *  v2: first-run seeding (only when the database is empty) and Go Live flag repair
+ *  v3: KRA templates (Developer, Functional); existing employees and KRAs join the Developer template
  */
 
 import type { KRAConfig } from "~/types/kra";
+import type { Employee } from "~/types/employee";
+import { DEFAULT_TEMPLATE_ID, FUNCTIONAL_TEMPLATE_ID } from "~/types/template";
 import {
   buildDefaultKRAConfig,
   buildDefaultSettings,
+  buildDefaultTemplates,
+  buildFunctionalKRAConfig,
   buildSampleEmployees,
   buildSampleMonthlyKRAs,
 } from "./seed";
 
-type StoreNames = { employees: string; kraConfig: string; monthlyKRA: string; settings: string };
-const S: StoreNames = { employees: "employees", kraConfig: "kraConfig", monthlyKRA: "monthlyKRA", settings: "settings" };
+const S = { employees: "employees", templates: "templates", kraConfig: "kraConfig", monthlyKRA: "monthlyKRA", settings: "settings" } as const;
 
 function ensureStore(db: IDBDatabase, tx: IDBTransaction, name: string, options: IDBObjectStoreParameters): IDBObjectStore {
   return db.objectStoreNames.contains(name) ? tx.objectStore(name) : db.createObjectStore(name, options);
@@ -38,6 +42,9 @@ function createSchema(db: IDBDatabase, tx: IDBTransaction): void {
 
   const kra = ensureStore(db, tx, S.kraConfig, { keyPath: "id" });
   ensureIndex(kra, "order", "order");
+  ensureIndex(kra, "templateId", "templateId");
+
+  ensureStore(db, tx, S.templates, { keyPath: "id" });
 
   const monthly = ensureStore(db, tx, S.monthlyKRA, { keyPath: "id" });
   ensureIndex(monthly, "employeeId", "employeeId");
@@ -80,11 +87,47 @@ function repairGoLiveFlag(tx: IDBTransaction): void {
   };
 }
 
+/** v3: backfill templateId, add the built-in templates and, if missing, the Functional KRAs. */
+function addTemplates(tx: IDBTransaction): void {
+  const now = new Date().toISOString();
+  const templates = tx.objectStore(S.templates);
+  const kra = tx.objectStore(S.kraConfig);
+  const employees = tx.objectStore(S.employees);
+
+  for (const t of buildDefaultTemplates(now)) {
+    const get = templates.get(t.id);
+    get.onsuccess = () => {
+      if (!get.result) templates.put(t);
+    };
+  }
+
+  const allKras = kra.getAll();
+  allKras.onsuccess = () => {
+    const existing = allKras.result as KRAConfig[];
+    for (const k of existing) if (!k.templateId) kra.put({ ...k, templateId: DEFAULT_TEMPLATE_ID });
+    // Only a database that already has a KRA setup gets the Functional KRAs here; a fresh one is seeded above.
+    if (!existing.some((k) => k.templateId === FUNCTIONAL_TEMPLATE_ID)) {
+      for (const k of buildFunctionalKRAConfig(now)) kra.put(k);
+    }
+  };
+
+  const allEmployees = employees.getAll();
+  allEmployees.onsuccess = () => {
+    for (const e of allEmployees.result as Employee[]) {
+      if (!e.templateId) employees.put({ ...e, templateId: DEFAULT_TEMPLATE_ID });
+    }
+  };
+}
+
 export function migrate(db: IDBDatabase, tx: IDBTransaction, oldVersion: number): void {
   if (oldVersion < 1) createSchema(db, tx);
   if (oldVersion < 2) {
     createSchema(db, tx); // repairs legacy v1 databases created before indexes were finalised
     seedIfEmpty(tx);
     repairGoLiveFlag(tx);
+  }
+  if (oldVersion < 3) {
+    createSchema(db, tx);
+    addTemplates(tx);
   }
 }

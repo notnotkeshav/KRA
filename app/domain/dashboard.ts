@@ -4,11 +4,13 @@ import type { Employee } from "~/types/employee";
 import type { KRAConfig } from "~/types/kra";
 import type { GoLiveOverride, MonthlyKRA, QuarterlyKRA } from "~/types/monthly-kra";
 import type { AppSettings } from "~/types/settings";
+import type { KRATemplate } from "~/types/template";
 import {
   type Quarter, getMonthsForQuarter, getPreviousQuarter, getQuarterFromMonth, getYearFromMonth, shiftMonth,
 } from "~/utils/dates";
 import { calculateMaxAchievement, calculateMonthlyAchievement, sumValues } from "./kra/calculations";
 import { buildQuarterlyKRAs } from "./kra/quarterly";
+import { krasForTemplate } from "./kra/templates";
 
 export type Performer = { employeeId: string; name: string; total: number };
 
@@ -22,7 +24,8 @@ export type DashboardData = {
   monthlyAverage: number | null;
   highest: Performer | null;
   lowest: Performer | null;
-  byKRA: { kra: KRAConfig; average: number }[];
+  /** Average per KRA, one block per template that has records in the reference month. */
+  byTemplate: { template: KRATemplate; employees: number; items: { kra: KRAConfig; average: number }[] }[];
   monthlyTrend: { month: string; values: { name: string; total: number | null }[] }[];
   quarterlyTrend: { year: number; quarter: Quarter; values: { name: string; total: number | null }[] }[];
   goLive: QuarterlyKRA[];
@@ -46,13 +49,13 @@ export function buildDashboard(
   referenceMonth: string,
   fallback: boolean,
   employees: Employee[],
+  templates: KRATemplate[],
   kras: KRAConfig[],
   settings: AppSettings,
   records: MonthlyKRA[],
   overrides: GoLiveOverride[],
 ): DashboardData {
   const active = employees.filter((e) => e.active);
-  const activeKras = kras.filter((k) => k.active);
   const year = getYearFromMonth(referenceMonth);
   const quarter = getQuarterFromMonth(referenceMonth);
 
@@ -60,14 +63,21 @@ export function buildDashboard(
   const performers: Performer[] = monthRecords.map((r) => ({
     employeeId: r.employeeId,
     name: active.find((e) => e.id === r.employeeId)!.name,
-    total: calculateMonthlyAchievement(r.achievements, kras),
+    total: calculateMonthlyAchievement(r.achievements, krasForTemplate(kras, active.find((e) => e.id === r.employeeId)!.templateId)),
   }));
   const sorted = [...performers].sort((a, b) => b.total - a.total);
 
-  const byKRA = activeKras.map((kra) => ({
-    kra,
-    average: monthRecords.length ? sumValues(monthRecords.map((r) => r.achievements[kra.id] ?? 0)) / monthRecords.length : 0,
-  }));
+  const byTemplate = templates
+    .map((template) => {
+      const ids = new Set(active.filter((e) => e.templateId === template.id).map((e) => e.id));
+      const recs = monthRecords.filter((r) => ids.has(r.employeeId));
+      const items = krasForTemplate(kras, template.id, true).map((kra) => ({
+        kra,
+        average: recs.length ? sumValues(recs.map((r) => r.achievements[kra.id] ?? 0)) / recs.length : 0,
+      }));
+      return { template, employees: recs.length, items };
+    })
+    .filter((t) => t.employees > 0);
 
   const monthlyTrend = [5, 4, 3, 2, 1, 0]
     .map((back) => shiftMonth(referenceMonth, -back))
@@ -75,7 +85,7 @@ export function buildDashboard(
       month,
       values: active.map((e) => {
         const r = records.find((x) => x.employeeId === e.id && x.month === month);
-        return { name: e.name, total: r ? calculateMonthlyAchievement(r.achievements, kras) : null };
+        return { name: e.name, total: r ? calculateMonthlyAchievement(r.achievements, krasForTemplate(kras, e.templateId)) : null };
       }),
     }))
     .filter((m) => m.values.some((v) => v.total !== null));
@@ -98,11 +108,11 @@ export function buildDashboard(
     referenceQuarter: { year, quarter },
     usingFallbackMonth: fallback,
     activeEmployees: active.length,
-    maxMonthly: calculateMaxAchievement(kras),
+    maxMonthly: Math.max(100, ...templates.map((t) => calculateMaxAchievement(krasForTemplate(kras, t.id)))),
     monthlyAverage: performers.length ? sumValues(performers.map((p) => p.total)) / performers.length : null,
     highest: sorted[0] ?? null,
     lowest: sorted.length > 1 ? sorted.at(-1)! : null,
-    byKRA,
+    byTemplate,
     monthlyTrend,
     quarterlyTrend,
     goLive: buildQuarterlyKRAs(active, year, quarter, records, kras, settings, overrides),

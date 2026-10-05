@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useFetcher } from "react-router";
 import type { Route } from "./+types/employees";
 import { createEmployee, deleteEmployee, getEmployees, updateEmployee } from "~/db/repositories/employees";
+import { getTemplates } from "~/db/repositories/templates";
 import type { Employee } from "~/types/employee";
 import { type ActionResult, fail, readJson } from "~/utils/actions";
 import { Alert, Badge, Button, ConfirmDialog, EmptyState, PageHeader, cardCls, inputCls } from "~/components/common/ui";
@@ -12,7 +13,8 @@ export function meta() {
 }
 
 export async function clientLoader() {
-  return { employees: await getEmployees() };
+  const [employees, templates] = await Promise.all([getEmployees(), getTemplates()]);
+  return { employees, templates };
 }
 
 type Intent =
@@ -44,7 +46,7 @@ export async function clientAction({ request }: Route.ClientActionArgs): Promise
 }
 
 export default function Employees({ loaderData }: Route.ComponentProps) {
-  const { employees } = loaderData;
+  const { employees, templates } = loaderData;
   const fetcher = useFetcher<ActionResult>();
   const [search, setSearch] = useState("");
   const [showInactive, setShowInactive] = useState(true);
@@ -69,9 +71,9 @@ export default function Employees({ loaderData }: Route.ComponentProps) {
     return employees.filter(
       (e) =>
         (showInactive || e.active) &&
-        (!q || [e.name, e.employeeCode, e.designation].some((v) => v?.toLowerCase().includes(q))),
+        (!q || [e.name, e.employeeCode, e.designation, templates.find((t) => t.id === e.templateId)?.name].some((v) => v?.toLowerCase().includes(q))),
     );
-  }, [employees, search, showInactive]);
+  }, [employees, templates, search, showInactive]);
 
   const send = (payload: Intent) => fetcher.submit(payload, { method: "post", encType: "application/json" });
 
@@ -89,7 +91,7 @@ export default function Employees({ loaderData }: Route.ComponentProps) {
       <div className="mb-3 flex flex-wrap items-center gap-4">
         <div className="w-full max-w-xs">
           <label htmlFor="emp-search" className="sr-only">Search employees</label>
-          <input id="emp-search" type="search" className={inputCls} placeholder="Search by name, code or designation" value={search} onChange={(e) => setSearch(e.target.value)} />
+          <input id="emp-search" type="search" className={inputCls} placeholder="Search by name, template, code or designation" value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
         <label className="flex items-center gap-2 text-sm text-slate-600">
           <input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} />
@@ -109,6 +111,7 @@ export default function Employees({ loaderData }: Route.ComponentProps) {
             <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
               <tr>
                 <th className="px-4 py-2">Name</th>
+                <th className="px-4 py-2">Template</th>
                 <th className="px-4 py-2">Code</th>
                 <th className="px-4 py-2">Designation</th>
                 <th className="px-4 py-2">Status</th>
@@ -121,6 +124,7 @@ export default function Employees({ loaderData }: Route.ComponentProps) {
                   <td className="px-4 py-2 font-medium">
                     <Link to={`/employees/${e.id}`} className="text-indigo-700 hover:underline">{e.name}</Link>
                   </td>
+                  <td className="px-4 py-2">{templates.find((t) => t.id === e.templateId)?.name ?? "—"}</td>
                   <td className="px-4 py-2">{e.employeeCode ?? "—"}</td>
                   <td className="px-4 py-2">{e.designation ?? "—"}</td>
                   <td className="px-4 py-2">{e.active ? <Badge tone="green">Active</Badge> : <Badge>Deactivated</Badge>}</td>
@@ -147,6 +151,7 @@ export default function Employees({ loaderData }: Route.ComponentProps) {
           key={editing === "new" ? "new" : editing.id}
           open
           employee={editing === "new" ? null : editing}
+          templates={templates}
           busy={busy}
           error={result && !result.ok ? result.error : undefined}
           onClose={() => setEditing(null)}

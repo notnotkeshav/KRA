@@ -6,10 +6,11 @@
 import { migrate } from "./migrations";
 
 export const DB_NAME = "kra-db";
-export const DB_VERSION = 2;
+export const DB_VERSION = 3;
 
 export const STORES = {
   employees: "employees",
+  templates: "templates",
   kraConfig: "kraConfig",
   monthlyKRA: "monthlyKRA",
   settings: "settings",
