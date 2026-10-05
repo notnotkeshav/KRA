@@ -7,8 +7,6 @@ const MONTH_NAMES = [
   "July", "August", "September", "October", "November", "December",
 ];
 
-const MONTH_PREFIXES = MONTH_NAMES.map((m) => m.slice(0, 3).toLowerCase());
-
 export function pad2(n: number): string {
   return String(n).padStart(2, "0");
 }
@@ -119,41 +117,6 @@ export function parseYearParam(value: string | undefined): number | null {
 export function parseMonthParam(value: string | undefined): number | null {
   const n = Number(value);
   return Number.isInteger(n) && n >= 1 && n <= 12 ? n : null;
-}
-
-function expandYear(raw: string): number {
-  const n = Number(raw);
-  return raw.length === 2 ? 2000 + n : n;
-}
-
-/**
- * Normalizes spreadsheet-style month text to `YYYY-MM`.
- * Accepts "Apr-26", "Apr-2026", "April 2026", "2026-04", "04/2026", "2026/04".
- * Returns null when the text is not a real month.
- */
-export function normalizeMonth(input: string): string | null {
-  const text = input.trim();
-
-  let m = /^(\d{4})[-/](\d{1,2})$/.exec(text);
-  if (m) return finish(Number(m[1]), Number(m[2]));
-
-  m = /^(\d{1,2})\/(\d{4})$/.exec(text);
-  if (m) return finish(Number(m[2]), Number(m[1]));
-
-  m = /^([A-Za-z]{3,9})[-\s/'](\d{2}|\d{4})$/.exec(text);
-  if (m) {
-    const idx = MONTH_PREFIXES.indexOf(m[1].slice(0, 3).toLowerCase());
-    const full = MONTH_NAMES[idx]?.toLowerCase();
-    const word = m[1].toLowerCase();
-    if (idx >= 0 && (word.length === 3 || full === word || full?.startsWith(word))) {
-      return finish(expandYear(m[2]), idx + 1);
-    }
-  }
-  return null;
-
-  function finish(year: number, month: number): string | null {
-    return month >= 1 && month <= 12 && year >= 2000 && year <= 2100 ? makeMonth(year, month) : null;
-  }
 }
 
 export function generateId(): string {

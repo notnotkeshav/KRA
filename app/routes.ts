@@ -16,7 +16,6 @@ export default [
     route("employees", "routes/employees.tsx"),
     route("employees/:employeeId", "routes/employee-detail.tsx"),
     route("kra-config", "routes/kra-config.tsx"),
-    route("import", "routes/import.tsx"),
     route("export", "routes/export.tsx"),
     route("settings", "routes/settings.tsx"),
     route("*", "routes/not-found.tsx"),
